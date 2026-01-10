@@ -1,0 +1,18 @@
+package com.fit.ecommerce.repositories;
+
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import com.fit.ecommerce.entities.Variant;
+
+import java.util.List;
+
+public interface VariantRepository extends JpaRepository<Variant, Long> {
+    boolean existsByName(String name);
+
+    Page<Variant> findByNameContainingIgnoreCase(String name, Pageable pageable);
+
+    List<Variant> findByStatus(Boolean status);
+
+}

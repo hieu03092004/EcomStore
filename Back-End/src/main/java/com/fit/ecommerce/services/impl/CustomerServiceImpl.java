@@ -1,0 +1,179 @@
+package com.fit.ecommerce.services.impl;
+
+import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.fit.ecommerce.dtos.request.address.AddressRequest;
+import com.fit.ecommerce.dtos.request.customer.CustomerAddRequest;
+import com.fit.ecommerce.dtos.request.customer.CustomerProfileRequest;
+import com.fit.ecommerce.dtos.response.address.AddressResponse;
+import com.fit.ecommerce.dtos.response.base.PageResponse;
+import com.fit.ecommerce.dtos.response.customer.CustomerResponse;
+import com.fit.ecommerce.entities.*;
+import com.fit.ecommerce.exceptions.ErrorCode;
+import com.fit.ecommerce.exceptions.custom.ResourceNotFoundException;
+import com.fit.ecommerce.mappers.CustomerMapper;
+import com.fit.ecommerce.repositories.*;
+import com.fit.ecommerce.services.CustomerService;
+import com.fit.ecommerce.services.RankingService;
+import com.fit.ecommerce.utils.SecurityUtils;
+
+import java.time.LocalDate;
+import java.util.List;
+
+@Service
+@RequiredArgsConstructor
+public class CustomerServiceImpl implements CustomerService {
+    private final RoleRepository roleRepository;
+    private final CartRepository cartRepository;
+    private final UserRoleRepository userRoleRepository;
+    private final CustomerRepository customerRepository;
+    private final CustomerMapper customerMapper;
+    private final PasswordEncoder passwordEncoder;
+    private final RankingService rankingService;
+    private final SecurityUtils securityUtils;
+    private final com.fit.ecommerce.services.AddressService addressService;
+
+    @Override
+    @Transactional
+    public CustomerResponse createCustomer(CustomerAddRequest request) {
+        Role role = roleRepository.findByName("CUSTOMER")
+                .orElseThrow(() -> new ResourceNotFoundException(ErrorCode.ROLE_NOT_FOUND));
+        Customer customer = customerMapper.toCustomer(request);
+        customer.setPassword(passwordEncoder.encode(customer.getPassword()));
+        customer.setActive(true);
+        if (customer.getAddresses() != null && !customer.getAddresses().isEmpty()) {
+            for (Address address : customer.getAddresses()) {
+                address.setCustomer(customer);
+            }
+        }
+        customerRepository.save(customer);
+        UserRole userRole = UserRole.builder()
+                .user(customer)
+                .role(role)
+                .build();
+        userRoleRepository.save(userRole);
+        Cart cart = Cart.builder()
+                .customer(customer)
+                .build();
+        cartRepository.save(cart);
+
+        Double newTotal = customer.getTotalSpending();
+        customer.setTotalSpending(newTotal);
+
+        Ranking newRank = rankingService.getRankingForSpending(newTotal);
+        customer.setRanking(newRank);
+        return customerMapper.toResponse(customer, role.getName());
+    }
+
+    @Override
+    public CustomerResponse getCustomerById(long id) {
+        Customer customer = getCustomerEntityById(id);
+        return customerMapper.toResponse(customer);
+    }
+
+
+    @Override
+    @Transactional
+    public PageResponse<CustomerResponse> getAllCustomers(int page, int limit, String name,
+                                                                String phone, String email, Boolean status, LocalDate startDate, LocalDate endDate, String rank ) {
+        page = page > 0 ? page - 1 : page;
+        Pageable pageable = PageRequest.of(page, limit);
+
+        Page<Customer> customerPage = customerRepository.searchCustomers(name, phone, email, status, startDate, endDate,rank, pageable);
+        return PageResponse.fromPage(customerPage, customerMapper::toResponse);
+    }
+
+
+    @Override
+    @Transactional
+    public CustomerResponse updateCustomer(long id, CustomerProfileRequest customerProfileRequest) {
+        Customer customer = getCustomerEntityById(id);
+        customer.setFullName(customerProfileRequest.getFullName());
+        customer.setPhone(customerProfileRequest.getPhone());
+        customer.setEmail(customerProfileRequest.getEmail());
+        customer.setAvatar(customerProfileRequest.getAvatar());
+        customer.setDateOfBirth(customerProfileRequest.getDateOfBirth());
+        customerRepository.save(customer);
+        return customerMapper.toResponse(customer);
+    }
+
+    @Override
+    @Transactional
+    public void deleteCustomer(long id) {
+        Customer customer = getCustomerEntityById(id);
+        cartRepository.deleteByCustomer(customer);
+        customerRepository.delete(customer);
+    }
+
+    @Override
+    @Transactional
+    public void changeStatusCustomer(Long id) {
+        Customer customer = getCustomerEntityById(id);
+        Boolean currentStatus = customer.getActive();
+        Boolean newStatus = (currentStatus == null) ? Boolean.TRUE : !currentStatus;
+        customer.setActive(newStatus);
+        customerRepository.save(customer);
+    }
+
+    @Override
+    public Customer getCustomerEntityById(Long id) {
+        return customerRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException(ErrorCode.CUSTOMER_NOT_FOUND));
+    }
+
+    @Override
+    public Customer getCustomerEntityByEmail(String email) {
+        return customerRepository.findByEmail(email)
+                .orElseThrow(() -> new ResourceNotFoundException(ErrorCode.CUSTOMER_NOT_FOUND));
+    }
+
+    @Override
+    @Transactional
+    public void updateExpoPushToken(String expoPushToken) {
+        Customer customer = securityUtils.getCurrentCustomer();
+        customer.setExpoPushToken(expoPushToken);
+        customerRepository.save(customer);
+    }
+    @Override
+    @Transactional
+    public AddressResponse addAddressForCustomer(Long customerId, AddressRequest request) {
+
+        getCustomerEntityById(customerId);
+        return addressService.addAddress(customerId, request);
+    }
+
+    @Override
+    @Transactional
+    public AddressResponse updateAddressForCustomer(Long customerId, Long addressId, AddressRequest request) {
+
+        getCustomerEntityById(customerId);
+        return addressService.updateAddress(customerId, addressId, request);
+    }
+
+    @Override
+    @Transactional
+    public void deleteAddressForCustomer(Long customerId, Long addressId) {
+
+        getCustomerEntityById(customerId);
+        addressService.deleteAddress(customerId, addressId);
+    }
+
+    @Override
+    public CustomerResponse getCustomerByPhone(String phone) {
+        Customer customer = customerRepository.findByPhone(phone)
+                .orElse(null);
+        
+        if (customer == null) {
+            return null;
+        }
+        
+        return customerMapper.toResponse(customer);
+    }
+
+}

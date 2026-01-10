@@ -1,0 +1,143 @@
+package com.fit.ecommerce.controllers;
+
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import com.fit.ecommerce.dtos.request.order.OrderCreationRequest;
+import com.fit.ecommerce.dtos.request.order.StaffOrderCreationRequest;
+import com.fit.ecommerce.dtos.response.base.PageResponse;
+import com.fit.ecommerce.dtos.response.base.ResponseSuccess;
+import com.fit.ecommerce.dtos.response.order.OrderResponse;
+import com.fit.ecommerce.enums.OrderStatus;
+import com.fit.ecommerce.services.OrderService;
+
+import org.springframework.security.access.prepost.PreAuthorize;
+
+import java.time.LocalDate;
+import java.util.List;
+
+import static org.springframework.http.HttpStatus.CREATED;
+import static org.springframework.http.HttpStatus.OK;
+
+@RestController
+@RequestMapping("${api.prefix}/orders")
+@RequiredArgsConstructor
+public class OrderController {
+    private final OrderService orderService;
+
+    @PostMapping(value = "")
+    public ResponseEntity<ResponseSuccess<Object>> customerCreateOrder(@Valid @RequestBody OrderCreationRequest orderCreationRequest,
+                                                                       HttpServletRequest request) {
+        return ResponseEntity.ok(new ResponseSuccess<>(
+                CREATED,
+                "Create Customer success",
+                orderService.customerCreateOrder(orderCreationRequest, request)
+        ));
+    }
+
+    @GetMapping("/my-orders")
+    public ResponseEntity<ResponseSuccess<PageResponse<OrderResponse>>> getMyOrders(
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "7") int size,
+            @RequestParam(required = false) List<String> status,
+            @RequestParam(required = false) String startDate,
+            @RequestParam(required = false) String endDate
+    ) {
+        return ResponseEntity.ok(new ResponseSuccess<>(
+                OK,
+                "Get my orders success",
+                orderService.getMyOrders(page, size, status, startDate, endDate)
+        ));
+    }
+
+    @GetMapping("/admin")
+    public ResponseEntity<ResponseSuccess<PageResponse<OrderResponse>>> getAllOrdersForAdmin(
+            @RequestParam(required = false) String customerName,
+            @RequestParam(required = false) LocalDate orderDate,
+            @RequestParam(required = false) String customerPhone,
+            @RequestParam(required = false) OrderStatus status,
+            @RequestParam(required = false) Boolean isPickup,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int size
+    ) {
+        return ResponseEntity.ok(new ResponseSuccess<>(
+                OK,
+                "Get all orders success",
+                orderService.getAllOrdersForAdmin(customerName, orderDate, customerPhone, status, isPickup, page, size)
+        ));
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<ResponseSuccess<OrderResponse>> getOrderDetailById(@PathVariable Long id) {
+        return ResponseEntity.ok(new ResponseSuccess<>(
+                OK,
+                "Get order detail success",
+                orderService.getOrderDetailById(id)
+        ));
+    }
+
+    @PutMapping("/{id}/confirm")
+    public ResponseEntity<ResponseSuccess<OrderResponse>> confirmOrder(@PathVariable Long id) {
+        return ResponseEntity.ok(new ResponseSuccess<>(
+                OK,
+                "Confirm order success",
+                orderService.confirmOrder(id)
+        ));
+    }
+
+    @PutMapping("/{id}/cancel")
+    public ResponseEntity<ResponseSuccess<OrderResponse>> cancelOrder(@PathVariable Long id) {
+        return ResponseEntity.ok(new ResponseSuccess<>(
+                OK,
+                "Cancel order success",
+                orderService.cancelOrder(id)
+        ));
+    }
+
+    @PutMapping("/{id}/process")
+    public ResponseEntity<ResponseSuccess<OrderResponse>> processOrder(@PathVariable Long id) {
+        return ResponseEntity.ok(new ResponseSuccess<>(
+                OK,
+                "Process order success",
+                orderService.processOrder(id)
+        ));
+    }
+
+    @PutMapping("/{id}/complete")
+    public ResponseEntity<ResponseSuccess<OrderResponse>> completeOrder(@PathVariable Long id) {
+        return ResponseEntity.ok(new ResponseSuccess<>(
+                OK,
+                "Complete order success",
+                orderService.completeOrder(id)
+        ));
+    }
+
+    @GetMapping("/need-shipper")
+    @PreAuthorize("hasRole('STAFF')")
+    public ResponseEntity<ResponseSuccess<PageResponse<OrderResponse>>> getOrdersNeedShipper(
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int size
+    ) {
+        return ResponseEntity.ok(new ResponseSuccess<>(
+                OK,
+                "Get orders need shipper success",
+                orderService.getOrdersNeedShipper(page, size)
+        ));
+    }
+
+    @PostMapping("/staff-create")
+    @PreAuthorize("hasRole('STAFF')")
+    public ResponseEntity<ResponseSuccess<Object>> staffCreateOrder(
+            @Valid @RequestBody StaffOrderCreationRequest request,
+            HttpServletRequest httpServletRequest
+    ) {
+        return ResponseEntity.ok(new ResponseSuccess<>(
+                CREATED,
+                "Staff create order success",
+                orderService.staffCreateOrder(request, httpServletRequest)
+        ));
+    }
+}

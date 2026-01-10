@@ -1,0 +1,36 @@
+package com.fit.ecommerce.services;
+
+import jakarta.transaction.Transactional;
+import jakarta.validation.Valid;
+
+import java.util.List;
+
+import com.fit.ecommerce.dtos.request.productQuestion.ProductQuestionAddRequest;
+import com.fit.ecommerce.dtos.request.productQuestion.ProductQuestionAnswerAddRequest;
+import com.fit.ecommerce.dtos.response.base.PageResponse;
+import com.fit.ecommerce.dtos.response.productQuestion.ProductQuestionResponse;
+import com.fit.ecommerce.dtos.response.productQuestion.ProductQuestionWithProductResponse;
+
+public interface ProductQuestionService {
+    ProductQuestionResponse createProductQuestion(@Valid ProductQuestionAddRequest request);
+
+    PageResponse<ProductQuestionResponse> getProductQuestionsByProductSlug(String slug, int page, int size);
+
+    ProductQuestionResponse createProductQuestionAnswer(@Valid ProductQuestionAnswerAddRequest request);
+
+
+    PageResponse<ProductQuestionWithProductResponse> getAllProductQuestionsForAdmin(
+            int page, int size, Boolean status, String search, Long productId, String sortBy, String sortOrder);
+
+    @Transactional
+    ProductQuestionWithProductResponse updateProductQuestionStatus(Long id, Boolean status);
+
+    @Transactional
+    void deleteProductQuestion(Long id);
+
+    @Transactional
+    ProductQuestionWithProductResponse updateProductQuestionAnswerStatus(Long answerId, Boolean status);
+
+    @Transactional
+    void deleteProductQuestionAnswer(Long answerId);
+}

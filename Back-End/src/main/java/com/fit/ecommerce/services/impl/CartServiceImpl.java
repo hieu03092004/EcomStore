@@ -1,0 +1,215 @@
+package com.fit.ecommerce.services.impl;
+
+import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.fit.ecommerce.dtos.request.cart.CartAddRequest;
+import com.fit.ecommerce.dtos.request.cart.CartUpdateQuantityRequest;
+import com.fit.ecommerce.dtos.response.cart.CartResponse;
+import com.fit.ecommerce.dtos.response.cart.CartWithCustomerResponse;
+import com.fit.ecommerce.entities.*;
+import com.fit.ecommerce.exceptions.ErrorCode;
+import com.fit.ecommerce.exceptions.custom.InvalidParamException;
+import com.fit.ecommerce.exceptions.custom.ResourceNotFoundException;
+import com.fit.ecommerce.mappers.CartMapper;
+import com.fit.ecommerce.repositories.CartRepository;
+import com.fit.ecommerce.repositories.ProductVariantRepository;
+import com.fit.ecommerce.services.CartService;
+import com.fit.ecommerce.services.EmailService;
+import com.fit.ecommerce.services.PromotionService;
+import com.fit.ecommerce.utils.SecurityUtils;
+
+import lombok.extern.slf4j.Slf4j;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class CartServiceImpl implements CartService {
+
+    private final SecurityUtils securityUtils;
+    private final CartRepository cartRepository;
+    private final ProductVariantRepository productVariantRepository;
+    private final PromotionService promotionService;
+    private final CartMapper cartMapper;
+    private final EmailService emailService;
+
+    @Override
+    public CartResponse getOrCreateCart() {
+        return cartMapper.toResponse(findOrCreateCartForCurrentUser());
+    }
+
+    @Override
+    public CartResponse addProduct(CartAddRequest request) {
+        Cart cart = findOrCreateCartForCurrentUser();
+        ProductVariant productVariant = findProductVariant(request.getProductVariantId());
+
+        CartDetail cartDetail = findCartDetail(cart, productVariant);
+
+        if (cartDetail != null) {
+            cartDetail.setQuantity(cartDetail.getQuantity() + request.getQuantity());
+        } else {
+            addNewCartDetail(cart, productVariant, request.getQuantity());
+        }
+
+        updateCartTotalItems(cart);
+
+        cartRepository.save(cart);
+
+        return cartMapper.toResponse(cart);
+    }
+
+    @Override
+    public CartResponse removeProduct(Long productVariantId) {
+        Cart cart = findOrCreateCartForCurrentUser();
+        ProductVariant productVariant = findProductVariant(productVariantId);
+
+        CartDetail cartDetail = findCartDetail(cart, productVariant);
+
+        if (cartDetail != null) {
+            cart.getCartDetails().remove(cartDetail);
+            cartRepository.save(cart);
+        }
+
+        updateCartTotalItems(cart);
+        cartRepository.save(cart);
+
+        return cartMapper.toResponse(cart);
+    }
+
+    @Override
+    public void clearCart(Long userId) {
+        Cart cart = cartRepository.findByCustomer_Id(userId)
+                .orElseThrow(() -> new ResourceNotFoundException(ErrorCode.CART_NOT_FOUND));
+
+        cart.getCartDetails().clear();
+        cart.setTotalItems(0L);
+
+        cartRepository.save(cart);
+    }
+
+    @Override
+    public CartResponse updateProductQuantity(CartUpdateQuantityRequest request) {
+        Cart cart = findOrCreateCartForCurrentUser();
+        ProductVariant productVariant = findProductVariant(request.getProductVariantId());
+        CartDetail cartDetail = findCartDetail(cart, productVariant);
+
+        if (cartDetail == null) {
+            throw new ResourceNotFoundException(ErrorCode.CART_ITEM_NOT_FOUND);
+        }
+
+        cartDetail.setQuantity(request.getQuantity().longValue());
+
+        if (cartDetail.getQuantity() <= 0) {
+            cart.getCartDetails().remove(cartDetail);
+        }
+
+        updateCartTotalItems(cart);
+        cartRepository.save(cart);
+
+        return cartMapper.toResponse(cart);
+    }
+
+    private Cart findOrCreateCartForCurrentUser() {
+        Customer customer = securityUtils.getCurrentCustomer();
+        return cartRepository.findByCustomer_Id(customer.getId())
+                .orElseGet(() -> {
+                    Cart newCart = new Cart();
+                    newCart.setCustomer(customer);
+                    newCart.setTotalItems(0L);
+                    return cartRepository.save(newCart);
+                });
+    }
+
+    private ProductVariant findProductVariant(Long productVariantId) {
+        return productVariantRepository.findById(productVariantId)
+                .orElseThrow(() -> new ResourceNotFoundException(ErrorCode.PRODUCT_VARIANT_NOT_FOUND));
+    }
+
+    private CartDetail findCartDetail(Cart cart, ProductVariant productVariant) {
+        return cart.getCartDetails().stream()
+                .filter(cd -> cd.getProductVariant().getId().equals(productVariant.getId()))
+                .findFirst()
+                .orElse(null);
+    }
+
+
+    private void addNewCartDetail(Cart cart, ProductVariant productVariant, int quantity) {
+        Promotion promotion = promotionService.getBestPromotionForVariant(productVariant);
+        CartDetail cartDetail = CartDetail.builder()
+                .cart(cart)
+                .productVariant(productVariant)
+                .quantity((long) quantity)
+                .price(productVariant.getPrice())
+                .discount(promotion != null ? promotion.getDiscount() : 0.0)
+                .build();
+        cart.getCartDetails().add(cartDetail);
+    }
+
+    private void updateCartTotalItems(Cart cart) {
+        long totalItems = cart.getCartDetails().stream()
+                .mapToLong(CartDetail::getQuantity)
+                .sum();
+        cart.setTotalItems(totalItems);
+    }
+
+    // Admin methods
+    @Override
+    public Page<CartWithCustomerResponse> getAllCartsWithItems(int page, int size, String keyword) {
+        Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "totalItems"));
+        
+        Page<Cart> carts;
+        if (keyword != null && !keyword.trim().isEmpty()) {
+            carts = cartRepository.searchCartsByCustomer(keyword.trim(), pageable);
+        } else {
+            carts = cartRepository.findAllCartsWithItemsPaged(pageable);
+        }
+        
+        return carts.map(cartMapper::toCartWithCustomerResponse);
+    }
+
+
+    @Override
+    public CartWithCustomerResponse getCartByCustomerId(Long customerId) {
+        Cart cart = cartRepository.findByCustomer_Id(customerId)
+                .orElseThrow(() -> new ResourceNotFoundException(ErrorCode.CART_NOT_FOUND));
+        return cartMapper.toCartWithCustomerResponse(cart);
+    }
+
+    @Override
+    @Transactional
+    public void sendRemindersBatch(List<Long> cartIds) {
+        if (cartIds == null || cartIds.isEmpty()) {
+            throw new InvalidParamException(ErrorCode.INVALID_PARAMETER);
+        }
+        List<Cart> carts = cartRepository.findCartsByIds(cartIds);
+        List<Cart> sentCarts = new ArrayList<>();
+
+        for (Cart cart : carts) {
+            try {
+                if (cart.getTotalItems() > 0 && cart.getCustomer() != null) {
+                    // 1. Gửi mail
+                    emailService.sendAbandonedCartReminder(cart.getCustomer().getEmail(), cart);
+
+                    // 2. Cập nhật thời gian gửi
+                    cart.setLastReminderSentAt(LocalDateTime.now());
+                    sentCarts.add(cart);
+                }
+            } catch (Exception e) {
+                // Log lỗi nhưng không dừng vòng lặp để các cart khác vẫn được gửi
+                log.error("Lỗi khi gửi reminder cho Cart ID {}: {}", cart.getId(), e.getMessage());
+            }
+        }
+        if (!sentCarts.isEmpty()) {
+            cartRepository.saveAll(sentCarts);
+        }
+    }
+
+}
