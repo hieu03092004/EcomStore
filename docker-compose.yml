@@ -1,0 +1,270 @@
+x-docker-logging: &default-docker-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: ecomstore-mysql
+    restart: always
+    env_file:
+      - .env
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - ecomstore-network
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u${MYSQL_USER} -p${MYSQL_PASSWORD} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    logging: *default-docker-logging
+  backend:
+    container_name: ecomstore-backend
+    build:
+      context: ./Back-End
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8081:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    restart: always
+    volumes:
+      - ecomstore_uploads:/app/uploads
+      - ecomstore_logs:/app/logs
+    networks:
+      - ecomstore-network
+    logging: *default-docker-logging
+
+  frontend:
+    container_name: ecomstore-frontend
+    build:
+      context: ./Front-End
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL}
+        VITE_WS_BASE_URL: ${VITE_WS_BASE_URL}
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    restart: always
+    networks:
+      - ecomstore-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    logging: *default-docker-logging
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+    container_name: ecomstore-elasticsearch
+    restart: always
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - ecomstore-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      retries: 5
+      start_period: 60s
+    logging: *default-docker-logging
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: ecomstore-qdrant
+    restart: always
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - ecomstore-network
+    logging: *default-docker-logging
+
+  minio:
+    image: minio/minio:latest
+    container_name: ecomstore-minio
+    command: server /data --console-address ":9001"
+    restart: always
+    env_file:
+      - .env
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - ecomstore-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      retries: 3
+    logging: *default-docker-logging
+
+  redis:
+    image: redis:latest
+    container_name: ecomstore-redis
+    restart: always
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
+    env_file:
+      - .env
+    volumes:
+      - redis_data:/data
+    networks:
+      - ecomstore-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      retries: 5
+    logging: *default-docker-logging
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: ecomstore-rabbitmq
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-admin}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-admin}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - ecomstore-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging: *default-docker-logging
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ecomstore-prometheus
+    restart: always
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    depends_on:
+      - backend
+      - node-exporter
+    networks:
+      - ecomstore-network
+    logging: *default-docker-logging
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: ecomstore-node-exporter
+    restart: always
+    ports:
+      - "9100:9100"
+    command:
+      - "--path.rootfs=/host"
+    volumes:
+      - /:/host:ro,rslave
+    networks:
+      - ecomstore-network
+    logging: *default-docker-logging
+
+  loki:
+    image: grafana/loki:2.9.8
+    container_name: ecomstore-loki
+    restart: always
+    ports:
+      - "3100:3100"
+    command: ["-config.file=/etc/loki/config.yml"]
+    volumes:
+      - ./observability/loki/config.yml:/etc/loki/config.yml:ro
+      - loki_data:/loki
+    networks:
+      - ecomstore-network
+    logging: *default-docker-logging
+
+  promtail:
+    image: grafana/promtail:2.9.8
+    container_name: ecomstore-promtail
+    restart: always
+    command: ["-config.file=/etc/promtail/config.yml"]
+    volumes:
+      - ./observability/promtail/config.yml:/etc/promtail/config.yml:ro
+      - ecomstore_logs:/app/logs:ro
+    depends_on:
+      - loki
+    networks:
+      - ecomstore-network
+    logging: *default-docker-logging
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ecomstore-grafana
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+      - loki
+    networks:
+      - ecomstore-network
+    logging: *default-docker-logging
+
+networks:
+  ecomstore-network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  elasticsearch_data:
+  qdrant_data:
+  rabbitmq_data:
+  minio_data:
+  redis_data:
+  ecomstore_uploads:
+  ecomstore_logs:
+  prometheus_data:
+  grafana_data:
+  loki_data:
